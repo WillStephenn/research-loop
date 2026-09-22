@@ -399,8 +399,12 @@ REPO_ROOT="$(cd "$HERE/.." && pwd)"
 # The closed vocabularies live in config, not in this script, so the loop can
 # be pointed at a new problem by editing one file. See config/loop.conf's own
 # header for why each list exists.
+# RL_CONFIG overrides the path, which is how the tests point the tool at a
+# scratch vocabulary without touching the shipped one. north_star.sh reads the
+# same variable, and the two must agree: a record admitted under one vocabulary
+# and scored under another is worse than either refusing it or accepting it.
 # shellcheck source=config/loop.conf
-. "$REPO_ROOT/config/loop.conf"
+. "${RL_CONFIG:-$REPO_ROOT/config/loop.conf}"
 
 # RL_REGISTRY / RL_JOURNAL exist so the state machine can be tested against a
 # scratch registry without writing fake hypotheses into the real one. Mirrors
