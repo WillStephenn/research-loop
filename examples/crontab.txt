@@ -1,0 +1,26 @@
+# A heartbeat for research-loop, as a crontab entry. Install it with `crontab -e`.
+#
+# Most calls exit within milliseconds: bin/tick.sh only runs the agent once the
+# due time the previous tick chose with bin/schedule_next.sh has passed. The
+# cadence therefore lives in state/next-wake, not here, so changing it never
+# needs a crontab edit.
+#
+# Two things cron will not do for you:
+#   PATH   cron's own PATH is minimal. Put the directory holding your agent
+#          command (claude, say) on it, as below.
+#   FIRST  with no due time set, the first call runs a tick at once. That is on
+#          purpose: a missing or unreadable due time must never stall the loop.
+#
+# Keep SCHEDULE_MIN_MINUTES in config/loop.conf at or above the interval below,
+# because asking for a shorter wake only rounds up to the next call.
+#
+# Replace /path/to/research-loop with your checkout. tick.sh finds its own
+# repository, so the cd is only there to put the log in a sensible place.
+
+PATH=/usr/local/bin:/usr/bin:/bin:/home/you/.local/bin
+
+*/5 * * * * cd /path/to/research-loop && ./bin/tick.sh >> state/tick.log 2>&1
+
+# No cron? A shell loop does the same job:
+#
+#   while true; do ./bin/tick.sh >> state/tick.log 2>&1; sleep 300; done

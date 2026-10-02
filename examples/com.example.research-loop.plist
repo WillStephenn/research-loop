@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- A heartbeat for research-loop on macOS. Copy this to
+         ~/Library/LaunchAgents/, edit the paths, then load it with
+         launchctl load ~/Library/LaunchAgents/com.example.research-loop.plist -->
+    <key>Label</key>
+    <string>com.example.research-loop</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/path/to/research-loop/bin/tick.sh</string>
+    </array>
+
+    <!-- A five minute heartbeat, not a five minute schedule. tick.sh runs the
+         agent only once the due time the previous tick chose has passed, so
+         most firings exit within milliseconds. The cadence lives in
+         state/next-wake, which means changing it needs no edit here and no
+         reload. Keep SCHEDULE_MIN_MINUTES in config/loop.conf at or above this
+         interval. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- launchd starts no second instance of a running label, so a long tick
+         simply makes later heartbeats wait. tick.sh keeps its own lock as well,
+         for calls made by hand. -->
+
+    <!-- launchd gives jobs a minimal environment. Put the directory holding
+         your agent command (claude, say) on PATH. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/Users/you/.local/bin</string>
+    </dict>
+
+    <!-- Needed only if your checkout is in a folder macOS protects, such as
+         Documents or Desktop. /bin/bash has no access to those, and the
+         failure is quiet. Either keep the checkout elsewhere, or grant
+         /bin/bash access under System Settings, Privacy and Security. -->
+
+    <key>StandardOutPath</key>
+    <string>/Users/you/Library/Logs/research-loop.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/you/Library/Logs/research-loop.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

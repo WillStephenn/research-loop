@@ -1,122 +1,140 @@
 # research-loop
 
-A falsification-disciplined harness for running a research programme unattended.
+*Extracted by Claude Opus 5 from a private research system I built and ran for four weeks. More on that below.*
 
-An agent driving a long research programme has one characteristic failure mode:
-it confirms itself. It proposes an idea, runs something, reads the result
-generously, records a success, and moves on. Do that for a month and you have a
-hundred confirmed hypotheses and no progress.
+An autonomous AI research agent framework: 6 skills (Markdown instruction files in `agent/`) and 5 shell
+scripts (in `bin/`), designed to run inside an existing coding agent harness. I used Claude Code with Opus 5.
 
-This is the machinery built to stop that. It holds hypotheses in a registry as a
-dependency graph, refuses any conjecture that does not say in advance what would
-kill it, and treats a falsified idea as permanently dead. It ranks what to test
-next by what is cheapest to settle and what unblocks the most other work. It
-lets the loop raise its own definition of success, but only upward, only on
-evidence it has already cleared twice, and only through one tool that enforces
-every condition by exit code.
+You give it a research problem and a quantifiable target to hit, written down in a
+[North Star file](examples/NORTH_STAR.md) (say "median error below 0.30"). It turns the problem into a
+structured hypothesis graph: every hypothesis is a node, with dependencies mapped out as edges. The agent works through the graph on its own, testing hypotheses, logging every result, and raising the
+target each time it clears it.
 
-The design principle throughout: an agent that can redefine victory will
-eventually declare it, so the guard has to be mechanical rather than a rule
-written down and remembered.
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 420}}}%%
+flowchart LR
+    Q(["Why is accuracy stuck at 70%?"])
+    H1["H1 · Training data has duplicates<br/>Hypothesis falsified if: removing them changes nothing"]
+    H2["H2 · The model is too small<br/>Hypothesis falsified if: a 2x size model scores the same."]
+    H3["H3 · The accuracy metric has a bug<br/>Hypothesis falsified if: accuracy worked out manually on a sample matches the recorded metric."]
+    H4["H4 · Train for longer<br/>waits on H3"]
+    H5["H5 · Tune the learning rate<br/>waits on H3"]
+    Q --> H1
+    Q --> H2
+    Q --> H3
+    H3 --> H4
+    H3 --> H5
+    classDef confirmed fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef falsified fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef next fill:#dbeafe,stroke:#2563eb,color:#1e3a8a,stroke-width:3px
+    classDef waiting fill:#f4f4f5,stroke:#a1a1aa,color:#3f3f46
+    class H1 confirmed
+    class H2 falsified
+    class H3 next
+    class H4,H5 waiting
+```
 
-## Provenance
+Each node is a hypothesis, with the result that would prove it wrong.
 
-This is an extract. The original is a private research system I built to run an
-unattended machine learning programme: it proposed hypotheses, selected the
-cheapest experiment that could falsify one, dispatched GPU work across around 30
-shared university lab machines, and recorded its verdicts in an append-only
-journal. Over four weeks it settled 85 registered hypotheses, confirming 27 and
-falsifying 32, including defects it found in its own evaluation harness.
+- **Green:** tested, and it held up.
+- **Red:** tested and proven wrong.
+- **Blue:** up next. Two other hypotheses depend on it, so it gets tested first.
+- **Grey:** waiting for something it depends on.
 
-That system stays private. The extraction was carried out by Claude Opus 5,
-working from the original repository, to separate the reusable core from the
-research it was pointed at. Every domain specific detail has been removed: the
-problem being studied, the measurements, the findings, the infrastructure. What
-is left is the part that was never about the research problem in the first
-place.
+## Key terms
 
-Two honest caveats. The original ran for four weeks and earned its scars; this
-generalised version has a test suite and a working demo but no production
-history of its own. And the layer that dispatched work across a machine fleet is
-not here, because it was specific to one university network and useless without
-it.
+| Term | Meaning |
+|---|---|
+| **Agent** | An AI coding agent that can run shell commands (I used Claude Code). Its instructions are in `agent/`; you supply the agent itself. |
+| **Hypothesis** | A testable claim about the problem, like "the accuracy metric has a bug". |
+| **Falsifier** | The specific result that would prove a hypothesis wrong, written down *before* it's tested. |
+| **Dependency** | Hypothesis 4 depends on Hypothesis 3 if Hypothesis 4 is only worth testing once Hypothesis 3 has been settled. |
+| **Root node** | A hypothesis that many other hypothesise depend on. Settling it first unblocks the most work and therefore makes it more valuable |
+| **Settled** | Confirmed (the falsifier didn't happen) or falsified (it did). |
+| **Probe / run** | The two test costs. A probe is an experiment that settles a hypothesis locally, in minutes. A run needs the expensive resource (GPUs, say) for hours. |
+| **Goal** | The definition of success, kept in a goal file (`NORTH_STAR.md`) as thresholds on your metrics. |
+| **Journal** | A log of everything that happened. Lines are only ever added, never changed. |
 
 ## How it works
 
-Three tools over two stores.
+The agent wakes up, reads the graph and the journal (checks it's state), does the next piece of work, writes down what
+happened, and stops. It sets its own wake-up time before it stops, based on what's in flight: "this
+experiment will finish in about two hours, so wake the next orchestrator then". A small heartbeat script,
+run every few minutes by cron or launchd, starts the agent once that time comes round. Everything lives in
+plain files under version control, so a fresh agent with no memory can pick up exactly where the last one
+left off.
 
-**`bin/hypothesis.sh`** is the registry. One JSON file per record, version
-controlled, so `git diff` shows what a tick changed and why. It holds two kinds
-of record. A *hypothesis* is a conjecture that gets spent: it requires a
-falsifier, and it is capped at three attempts. A *task* is an obligation that
-gets discharged: it requires a done condition instead, and has no cap. Admitting
-both as one family would have forced fake falsifiers onto things that are not
-conjectures.
+1. **Generate hypotheses.** After each result, the agent writes down hypotheses that could explain it. Each
+   one has to cite the result that prompted it (a journal entry or a file and line), say which metric it
+   expects to move, list any hypotheses it depends on, and give its falsifier. Without a falsifier it is
+   refused programatically. A similarity check flags near-duplicates of hypotheses already in the graph.
+2. **Choose what to test.** `hypothesis.sh next` ranks the open hypotheses: ones whose dependencies are
+   settled come first, then whichever unblocks the most others, then probes before runs, then the area
+   that's had the fewest attempts so far, so effort doesn't pile up in one place.
+3. **Test it.** The agent marks the hypothesis as being tested, runs the experiment, and records the outcome
+   along with the evidence. Falsified is final. Each hypothesis gets at most three attempts. If it can't be
+   decided yet it's marked blocked, and reopening it needs a new reason, not just another try.
+4. **Raise the goal.** `north_star.sh` checks the latest results against the goal. Once the goal has been
+   met on two evaluations in a row, the agent may raise the thresholds, but only to levels it has already
+   reached twice, and never lower them.
 
-States are `open`, `testing`, `confirmed`, `falsified`, `blocked` and
-`superseded`. `falsified` is terminal. `blocked` back to `open` requires a new
-mechanism, not a change of mind. `superseded` exists so a hypothesis can be
-retired untested when another result makes it moot, because using `falsified`
-for that would claim evidence that does not exist.
+Every rule above is enforced by the tools themselves: break one and the command refuses and exits with an
+error code, so the agent can't talk its way around them.
 
-There is deliberately no field for predicted impact. A guess that becomes a sort
-key launders itself into evidence.
+| Tool | What it holds | What it won't let you do |
+|---|---|---|
+| `bin/hypothesis.sh` | the hypothesis graph | add a hypothesis with no falsifier, revive a falsified one, or go past three attempts |
+| `bin/north_star.sh` | the goal | lower the target, or raise it before it's been met twice |
+| `bin/journal.sh` | the log of what happened | edit or delete anything already written |
+| `bin/schedule_next.sh` | when the agent wakes next | sleep for less than 15 minutes or more than 16 hours |
+| `bin/tick.sh` | the heartbeat that starts the agent | start it early, or run two at once; it also resumes or flags a session that died |
 
-**`bin/north_star.sh`** is the ratchet over the goal file. The goal file is the
-loop's only definition of success; everything else, every threshold and preset
-and gate criterion, is an instrument the loop may revise freely. Left immutable,
-a met target has nowhere to go and success behaves exactly like failure. So the
-loop is delegated exactly one change: it may raise the bar, never lower it, only
-when the current bar has been met at two consecutive registered evaluations, and
-only to a value the evidence has already cleared twice. The shape of the
-conditions stays human owned. Nine numbered exit codes carry the refusals.
+## Where it came from
 
-**`bin/journal.sh`** is an append-only ndjson event log. Nothing rewrites a
-line. The registry records what is *believed* and changes as evidence arrives;
-the journal records what *happened* and never changes. They join on a hypothesis
-id, which is the whole handoff primitive: an agent given nothing but an id can
-recover the full context of what it was doing.
+I built the original to run an ML research project by itself for four weeks. In that time it worked
+through 85 hypotheses, confirming 27 and disproving 32, and along the way it found bugs in its own
+evaluation code. The original code is private, but the screenshots below some of what it produced. Claude
+Opus 5 extracted the reusable core into this repo and stripped out everything specific to that research.
+The agent's instructions came across too, rewritten as small modules in `agent/`.
+
+Two views of the original's hypothesis graph. The first 25 of the 85
+hypotheses in the registry, displayed using `hypothesis.sh list`, each with its family, state, test cost,
+attempts and the start of its claim:
+
+![hypothesis.sh list from the original project](docs/img/hypothesis-list.png)
+
+Then the same hypotheses grouped by family, displayed using `hypothesis.sh families`, showing how many were tried, falsified and set aside in each,
+and how often a settled hypothesis actually moved a North Star number:
+
+![hypothesis.sh families from the original project](docs/img/hypothesis-families.png)
+
+## What I'd do differently
+
+**Explore better ranking heuristics.** The agent comes up with hypotheses far faster than it can test them.
+In the three weeks the registry was in use it registered 85, about four a day, but only 14 were settled by a
+full run (the multi-hour GPU experiments that actually drove progress). Most of the rest were settled by
+cheap probes or set aside, and 19 were still waiting when the project ended. With generation outpacing
+testing like that, choosing what to test next is where most of the value comes from, which makes ranking
+the hardest part of the system.
+
+Right now it ranks on four things: whether a hypothesis's dependencies are settled, how many other
+hypotheses it unblocks, how cheap it is to test, and spreading attempts across families. That balances
+exploration against the resources available reasonably well, but it leans towards breadth-first search and
+can discourage digging deep into a promising chain of hypotheses. The next step would be to use the history
+from the original run to build alternative ranking models and backtest them against the hypotheses it
+actually settled, to see whether any weighting reaches the North Star sooner.
 
 ## Try it
 
 ```bash
-./demo/walkthrough.sh
+./demo/walkthrough.sh   # a toy problem end to end, then four things it shouldn't allow (each one gets refused)
+./tests/test_*.sh       # 388 checks, no network needed
 ```
 
-A narrated pass through the lifecycle against a scratch registry, built in a
-temporary directory and discarded at the end. It registers hypotheses, ranks
-them, records verdicts, and then deliberately attempts four things that should
-not be allowed: a hypothesis with no falsifier, resurrecting a falsified one,
-ratcheting to a bar the evidence has not cleared, and ratcheting to an easier
-one. Each refusal is run for real and its exit code checked. The refusals are
-the product.
+To point it at your own problem, edit `config/loop.conf` (your metrics and the categories hypotheses can
+belong to) and write a goal file (`examples/NORTH_STAR.md` is a worked one). To run it for real, set
+`AGENT_CMD` in the same file to your agent and call `bin/tick.sh` every few minutes (`examples/` has a cron
+line and a launchd plist). [agent/README.md](agent/README.md) explains how the agent's instruction files fit
+together, and [docs/design.md](docs/design.md) has the reasoning behind each rule.
 
-Pass `--keep` to leave the scratch directory behind and read the records it
-built.
-
-## Pointing it at your own problem
-
-Edit `config/loop.conf`. It holds the closed vocabularies: the families a
-hypothesis may belong to, the metrics it may claim to move, the axes the ratchet
-may raise and which direction is harder on each, the cost tiers, and the attempt
-cap. Nothing else needs to change. The vocabularies are closed on purpose: a
-free text family field becomes a pile of near synonyms within a fortnight, and a
-free text target field lets a hypothesis claim it moved something nobody agreed
-to measure.
-
-Then write a goal file. `examples/NORTH_STAR.md` is a worked one for the demo's
-toy task.
-
-## Tests
-
-```bash
-./tests/test_hypothesis.sh
-./tests/test_journal.sh
-./tests/test_north_star.sh
-```
-
-No network, no fixtures outside the repo.
-
-## Licence
-
-MIT. See `LICENSE`.
+MIT licence.

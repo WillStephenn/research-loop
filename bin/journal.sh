@@ -18,6 +18,10 @@
 #                          reconciliation, saying what was recovered and what
 #                          was discarded. Without it a dead tick is
 #                          indistinguishable from a tick that never ran
+#   wake_scheduled        the orchestrator asked for its next wake-up, via
+#                          bin/schedule_next.sh. The note carries the time and
+#                          the reason, so the successor can judge whether the
+#                          estimate held
 #   run_started           an evaluation run was launched
 #   run_healthy           a periodic check found the run progressing normally
 #   run_degraded          a periodic check tripped a heuristic that flags a
@@ -171,7 +175,8 @@
 # Exit codes:  0 = success
 #              1 = `last` found no entry matching --event, or `active-runs`
 #                  found none
-#              2 = usage error (missing/unknown --event, bad flag)
+#              2 = usage error (missing/unknown --event, bad flag), or the
+#                  line could not be written
 #
 # Usage:
 #   ./journal.sh append --event run_started --run-id run-042 --variant v3 \
@@ -219,7 +224,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 JOURNAL="${RL_JOURNAL:-$REPO_ROOT/registry/journal.ndjson}"
 
-EVENTS=(orchestrator_woke tick_aborted run_started run_healthy run_degraded run_died
+EVENTS=(orchestrator_woke tick_aborted wake_scheduled run_started run_healthy run_degraded run_died
         run_stopped
         run_completed eval_started eval_completed revision_proposed
         revision_implemented no_capacity hosts_cleaned
@@ -414,7 +419,10 @@ cmd_append() {
 
     # Single write() call so concurrent appends from different invocations
     # don't interleave - lines this size are well under PIPE_BUF.
-    printf '%s\n' "$line" >> "$JOURNAL"
+    # A write that fails must not read as success: an unattended loop would
+    # carry on believing a record exists that was never written.
+    printf '%s\n' "$line" >> "$JOURNAL" \
+        || { echo "could not write to $JOURNAL" >&2; exit 2; }
     echo "appended: $line"
 }
 
